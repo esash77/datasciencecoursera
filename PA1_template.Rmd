@@ -1,0 +1,162 @@
+---
+title: "RepData_PeerAssessment1"
+output: html_document
+---
+
+## Overview
+
+We will examine some data from a personal activity monitoring device attached to an anonymous individual. The device has recorded the number of steps taken during each five-minute interval over a period of two months. Our overall aim is to see how the activity level of this person---as measured by the number of steps he/she takes in five minutes, varies over the course of a day. We also want to see whether weekday and weekend activity levels differ.
+
+## Loading and Preprocessing the Data
+
+First we attach the necessary packages:
+
+```{r}
+library(dplyr)
+library(ggplot2)
+library(lubridate)
+```
+
+Next, we unzip the data file, read it in:
+
+```{r}
+unzip("activity.zip")
+activity <- read.csv("activity.csv", header = T, stringsAsFactors = F)
+```
+
+Initially the time intervals are recorded in a somewhat non-standard way: for example, the value "1055" represent the five-minute interval from 10:55 to 11:00 AM. We perform a transformation so that the interval variable gives the start time of the interval in number of minutes elapsed since the beginning (at midnight) of the given day.
+
+```{r}
+interval <- activity$interval
+mins <- floor(interval/100) * 60 + interval %% 100
+activity$interval <- mins
+```
+
+## Mean Total Steps Per Day
+
+We use package dplyr to group the data by day and compute the total number of steps per day:
+
+```{r}
+stepsSum <- activity %>%
+  group_by(date) %>%
+  summarize(total = sum(steps, na.rm = T))
+meantspd <- with(stepsSum, as.integer(mean(total)))
+mediantspd <- with(stepsSum, as.integer(median(total)))
+```
+
+The mean total number of steps per day is r meantspd and the median total number of steps per day is r mediantspd.
+
+(Note: these values are a bit off, due to some missing data. See the section on Imputing Missing Values for more information.)
+
+Here is a histogram of the total number of steps per day:
+
+```{r}
+ggplot(stepsSum, aes(x = total)) + geom_histogram(binwidth = 1000) +
+  labs(x = "total steps in a day", title = "Histogram of Total Steps Per Day")
+```
+
+As you can see, there are quite a few days with very few total steps taken. Later we will see why this is so.
+
+## Average Daily Activity Pattern
+
+To see how activity level typically varies in the course of a day, we group by the five-minute intervals and compute the mean number of steps taken (over all days) during each one of these intervals. Then we produce a time-series plot of these means:
+
+```{r}
+stepInts <- activity %>%
+  group_by(interval) %>%
+  summarize(meanSteps = mean(steps, na.rm = T))
+timeLabs <- c("12 am",paste(1:5*2,"am"),"12 pm",paste(7:11*2-12,"pm"), "12 am")
+breaks <- seq(0,1440, by = 120)
+ggplot(stepInts, aes(x = interval, y = meanSteps)) + geom_line() +
+  scale_x_continuous(limits=c(0,1440),breaks=breaks,labels=timeLabs) +
+  labs(x = "time of day", y = "mean number of steps taken",
+       title = "Activity Level Over the Day")
+```
+       
+The person appears to be most active between about 8:00 and 8:30 AM. The time interval with the highest mean number of steps is found as follows:
+
+```{r}
+highTime <- stepInts$interval[stepInts$meanSteps == max(stepInts$meanSteps)]
+```
+
+The most active time interval was r highTime to r highTime+5 minutes, or from 8:35 to 8:40 AM.
+
+## Imputing Missing Values
+
+For some intervals the number of steps taken is missing. Let's see on what days they occurred:
+
+```{r}
+stepsMissing <- subset(activity, is.na(steps))
+daysMissing <- stepsMissing %>% group_by(date) %>% summarize(missingIntervals = n())
+daysMissing
+```
+
+Eight days had 288 missing step measurements. Since $288 \times 5 = 1440$ minutes (or 24 hours), the data was missing all day. For all other days, there were no missing step-measurements.
+
+When numerical summaries are performed and a given day has all step-values missing, then for that day the sum of the step-values, computed with the option na.rm = TRUE, is returned as 0. This means that the mean and median total steps taken, as computed previously, are a bit lower than they should be.
+
+We will impute each missing step-measurement by taking the mean over all non-missing step-measurements for the same time-interval:
+
+```{r}
+steps <- activity$steps
+for ( i in seq_along(steps) ) {
+  if (is.na(steps[i])) {
+    sameInt <- steps[activity$interval == activity$interval[i]]
+    steps[i] <- mean(sameInt, na.rm = TRUE)
+  }
+}
+activity$stepsImputed <- steps
+```
+
+The new mean total steps taken is:
+
+```{r}
+stepsSumImputed <- activity %>%
+  group_by(date) %>%
+  summarize(total = sum(stepsImputed)) 
+with(stepsSumImputed, as.integer(mean(total)))
+```
+
+a good bit higher than before (eight zeroes have been replaced by the mean value). The median is:
+
+```{r}
+with(stepsSumImputed, as.integer(median(total)))
+```
+
+This is the same as the mean. After all, the totals for the eight imputed days are near the middle of an ordered list of all totals, so the median occurs at one of them.
+
+Here's new histogram of the total number of steps taken per day, with missing values imputed:
+
+```{r}
+ggplot(stepsSumImputed, aes(x = total)) + geom_histogram(binwidth = 1000) +
+  labs(x = "total steps in a day",
+       title = "Histogram of Total Steps Per Day\n(Missing Days Imputed)")
+```
+
+The eight days formerly at 0 now are assigned to the bin located over the mean total number of steps.
+
+## Weekday vs. Weekend
+
+In order to see whether activity pattern throughout the day varies with whether or not the day is a weekend day, we create a new factor variable:
+
+```{r}
+activity$day <- weekdays(as.Date(activity$date))
+activity$weekend <- factor(ifelse(activity$day %in% c("Saturday", "Sunday"), 
+                                  "weekend", "during week"))
+```
+
+We now make time-series plots of mean steps per time-interval (including the imputed values, although this doesn't make a difference), one for each type of day:
+
+```{r}
+stepInts <- activity %>%
+  group_by(interval,weekend) %>%
+  summarize(meanSteps = mean(stepsImputed))
+ggplot(stepInts, aes(x = interval, y = meanSteps)) + 
+  geom_line((aes(color = weekend))) +
+  scale_x_continuous(limits=c(0,1440), breaks=breaks, labels=timeLabs) +
+  labs(x = "time of day", y = "mean number of steps taken",
+       title = "Activity Level Over the Day\n(Week vs. Weekend)") +
+  guides(color = guide_legend(title = "Type of Day"))
+```
+
+It appears that the person on a weekend the person is a somewhat less active during the morning "wake-up hours" from 6:00 to 8:00 AM, but generally more active during mid-day (perhaps doing chores around the house rather than sitting at a desk).
